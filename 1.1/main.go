@@ -6,6 +6,7 @@ import (
 )
 
 func main() {
+    // Create T1 and T2
     t1, t2 := t.New(1), t.New(2)
 
     // Start thread T1
