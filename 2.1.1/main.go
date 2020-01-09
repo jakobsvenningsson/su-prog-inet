@@ -34,10 +34,10 @@ func main() {
     }
     fmt.Printf("Connection successful.\n")
 
-    // Start listening for chat messages from other client.
-    client.ListenForServerMessages()
-
     // Start listening for user input, and send input input to chat-server. 
-    // This function blocks.
     client.StartClientSendLoop()
+
+    // Start listening for chat messages from other client.
+    // This function blocks.
+    client.ListenForServerMessages()
 }

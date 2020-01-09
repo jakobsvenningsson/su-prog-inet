@@ -28,28 +28,29 @@ func (c *Client) Connect() error {
 // The incoming messages will be printed to stdout.
 func (c *Client) ListenForServerMessages() {
     reader := bufio.NewReader(c.conn)
-    go func() {
-        for {
-            message, err := reader.ReadString('\n')
-            if err != nil {
-                fmt.Printf("Error reading message.\n")
-            }
-            fmt.Printf("Message from server: %s", message)
+    for {
+        message, err := reader.ReadString('\n')
+        if err != nil {
+            fmt.Printf("Error %s.\n", err)
+            return
         }
-    }()
+        fmt.Printf("Message from server: %s", message)
+    }
 }
 
 // StartClientSendLoop listens for input on stdin and writes user input to the chat-server.
 func (c *Client) StartClientSendLoop() {
-    reader := bufio.NewReader(os.Stdin)
-    for {
-        text, err := reader.ReadString('\n')
-        if err != nil {
-            fmt.Printf("Error reading user input data.\n")
-            continue
+    go func() {
+        reader := bufio.NewReader(os.Stdin)
+        for {
+            text, err := reader.ReadString('\n')
+            if err != nil {
+                fmt.Printf("Error %s.\n", err)
+                return
+            }
+            fmt.Fprintf(c.conn, text)
         }
-        fmt.Fprintf(c.conn, text)
-    }
+    }()
 }
 
 // New initializes and returns the address of a new struct Client.
