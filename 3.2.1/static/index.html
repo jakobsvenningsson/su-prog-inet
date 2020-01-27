@@ -1,0 +1,56 @@
+<html>
+<header>
+    <title>3.2.1</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" integrity="sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T" crossorigin="anonymous">
+</header>
+<body>
+    <script src="send.js"></script>
+
+    <div class="container">
+        <div class="row">
+            <h1>Email client</h1>
+        </div>
+        <div class="row">
+            <div class="col-md-4">
+                <form id="emailForm" onsubmit="sendEmail(event)">
+                    <div class="form-group">
+                        <label for="emailServer">Email Server</label>
+                        <input type="text" class="form-control" id="emailServer" placeholder="Enter email server">
+                    </div>
+                    <div class="form-group">
+                        <label for="emailPort">Port</label>
+                        <input type="text" class="form-control" id="emailPort" placeholder="Enter email port">
+                    </div>
+                    <div class="form-group">
+                        <label for="emailServerUsername">Username</label>
+                        <input type="text" class="form-control" id="emailServerUsername" placeholder="Enter email server username">
+                    </div>
+                    <div class="form-group">
+                        <label for="emailServerPassword">Password</label>
+                        <input type="password" class="form-control" id="emailServerPassword" placeholder="Enter email server password">
+                    </div>
+                    <h2>Message:</h2>
+                    <div class="form-group">
+                      <label for="emailFrom">From</label>
+                      <input type="text" class="form-control" id="emailFrom">
+                    </div>
+                    <div class="form-group">
+                        <label for="emailTo">To</label>
+                        <input type="text" class="form-control" id="emailTo">
+                    </div>
+                    <div class="form-group">
+                        <label for="emailSubject">Subject</label>
+                        <input type="text" class="form-control" id="emailSubject">
+                    </div>
+                    <div class="form-group">
+                        <label for="emailMessage">Message</label>
+                        <input type="text" class="form-control" id="emailMessage">
+                    </div>
+                    <button type="submit" class="btn btn-primary">Send</button>
+                  </form>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+
