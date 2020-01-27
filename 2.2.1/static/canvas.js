@@ -16,7 +16,7 @@ window.onload = function() {
         .then(res => res.json())
         .then(json => {
             json.forEach(line => {
-                const cords = line.coords
+                const cords = line.cords
                 let prev = cords.shift()
                 cords.forEach((next) => {
                     drawLine(ctx, prev.x, prev.y, next.x, next.y)

@@ -14,16 +14,10 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// Peer represents another drawing client.
-type Peer struct {
-	port string
-	host string
-}
-
 // DrawServer represents a drawing server.
 type DrawServer struct {
 	port  string
-	peers []Peer
+	peers []string
 	lines []line
 	ws    *websocket.Conn
 }
@@ -34,7 +28,7 @@ type point struct {
 }
 
 type line struct {
-	Coordiantes []point
+	Coordiantes []point `json:"cords"`
 }
 
 var upgrader = websocket.Upgrader{
@@ -42,13 +36,8 @@ var upgrader = websocket.Upgrader{
 	WriteBufferSize: 1024,
 }
 
-// NewPeer returns a new struct Peer.
-func NewPeer(host, port string) Peer {
-	return Peer{host: host, port: port}
-}
-
 // New returns a new struct DrawServer.
-func New(port string, peers []Peer) *DrawServer {
+func New(port string, peers []string) *DrawServer {
 	return &DrawServer{
 		port:  port,
 		peers: peers,
@@ -125,8 +114,9 @@ func (ds *DrawServer) newWs(w http.ResponseWriter, r *http.Request) {
 		}
 		ds.lines = append(ds.lines, line{Coordiantes: coordinates})
 
-		for _, peer := range ds.peers {
-			addr := fmt.Sprintf("%s:%s", peer.host, peer.port)
+		for _, peerPort := range ds.peers {
+			addr := fmt.Sprintf("127.0.0.1:%s", peerPort)
+			fmt.Println("sending to addr")
 			conn, err := net.Dial("udp", addr)
 			if err != nil {
 				panic(err)
