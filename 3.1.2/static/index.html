@@ -1,0 +1,55 @@
+<html>
+<header>
+    <title>3.1.2</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" integrity="sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T" crossorigin="anonymous">
+</header>
+<body>
+    <div class="container-fluid">
+        <div class="row offset-1">
+            <div class="col-10">
+                <div class="row m-3">
+                    <h1>Email client</h1>
+                </div>
+                <div class="row m-3">
+                    <h2>Write new post:</h2>
+                </div>
+                <div class="row m-3">
+                    <form class="w-100" onsubmit="submitPost(event)" id="postForm">
+                        <div class="form-group">
+                            <label for="postName">Name</label>
+                            <input type="text" class="form-control" id="postName" placeholder="Enter name">
+                        </div>
+                        <div class="form-group">
+                            <label for="postEmail">Email</label>
+                            <input type="email" class="form-control" id="postEmail" placeholder="Enter email">
+                            </div>
+                        <div class="form-group">
+                            <label for="postHomepage">Homepage</label>
+                            <input type="text" class="form-control" id="postHomepage" placeholder="Enter homepage">
+                        </div>
+                        <div class="form-group">
+                            <label for="postComment">Comment</label>
+                            <input type="text" class="form-control" id="postComment" placeholder="Enter comment">
+                            </div>
+                        <button type="submit" class="btn btn-primary">Submit</button>
+                        </form>
+                </div>
+                <div class="row m-3">
+                    <div class="col">
+                        <div class="row">
+                            <h2>Posts:</h2>
+                        </div>
+                    </div>
+                </div>
+                <div class="row m-3">
+                    <div class="col" id="postsCol">
+                    </div>
+                </div>
+            </div>
+            <div class="col-1"></div>
+       </div>
+    </div>
+    <script src="post.js"></script>
+</body>
+</html>
+
