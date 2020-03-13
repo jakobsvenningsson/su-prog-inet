@@ -35,7 +35,7 @@ func New(usrIn io.Reader, ctrlConn io.ReadWriter, dataConnAddr, outDir string) (
 		ctrlConn:        ctrlConn,
 		ctrlConnScanner: bufio.NewScanner(ctrlConn),
 		usrIn:           ftp_cmd.NewScanner(usrIn),
-		connectionMode:  ftp_cmd.ACTIVE,
+		connectionMode:  ftp_cmd.NOT_SET,
 		dataConnAddr:    dataConnAddr,
 		ioCh:            make(chan string),
 		outDir:          outDir,
@@ -46,15 +46,16 @@ func (client *FtpClient) ProcessCommands() error {
 	var wg sync.WaitGroup
 	go client.startIOChannel(&wg)
 	for {
-		token, err := client.usrIn.NextCommand()
+		cmd, err := client.usrIn.NextCommand()
 		if err != nil {
-			log.Println(err.Error())
-			break
+			log.Printf("%s.\n", err.Error())
+			continue
 		}
-		log.Printf("Processing token: %s, arg: %s.\n", token.Type, token.Arg)
-		status, reply, err := client.processToken(token, &wg)
+		log.Printf("Processing cmd: %s, arg: %s.\n", cmd.Type, cmd.Arg)
+		status, reply, err := client.processCommand(cmd, &wg)
 		if err != nil {
-			return err
+			log.Printf("%s.\n", err.Error())
+			continue
 		}
 		client.ioCh <- fmt.Sprintf("\r%d %s\n", status, reply)
 	}
@@ -64,7 +65,7 @@ func (client *FtpClient) ProcessCommands() error {
 
 func (client *FtpClient) Authenticate(user, pw string) error {
 	// 1. Send user using the "USER :user" FTP command
-	status, _, err := client.processToken(&ftp_cmd.Cmd{ftp_cmd.USER, user}, nil)
+	status, _, err := client.processCommand(&ftp_cmd.Cmd{ftp_cmd.USER, user}, nil)
 	if err != nil {
 		return err
 	}
@@ -72,7 +73,7 @@ func (client *FtpClient) Authenticate(user, pw string) error {
 		return unexpectedStatusError(status, 331)
 	}
 	// 2. Send password using the "PASS :password" FTP command
-	status, _, err = client.processToken(&ftp_cmd.Cmd{ftp_cmd.PASS, pw}, nil)
+	status, _, err = client.processCommand(&ftp_cmd.Cmd{ftp_cmd.PASS, pw}, nil)
 	if err != nil {
 		return err
 	}
@@ -88,21 +89,32 @@ func (client *FtpClient) ReadWelcomeMessage() (int, string, error) {
 
 // Private Methods
 
-func (client *FtpClient) processToken(token *ftp_cmd.Cmd, wg *sync.WaitGroup) (int, string, error) {
-	cmd, arg := token.Type, token.Arg
-	if cmd == ftp_cmd.PORT {
-		encodedArg, err := ftp_ip.Encode(arg)
+func (client *FtpClient) processCommand(command *ftp_cmd.Cmd, wg *sync.WaitGroup) (int, string, error) {
+	cmd, arg := command.Type, command.Arg
+	switch cmd {
+	case ftp_cmd.LIST, ftp_cmd.RETR:
+		if client.connectionMode == ftp_cmd.NOT_SET {
+			return 0, "", errors.New("No connection mode specified")
+		}
+		go client.startDataConnection(cmd, arg, client.dataConnAddr, wg)
+	case ftp_cmd.PORT:
+		tmp := strings.Split(arg, ":")
+		encodedArg, err := ftp_ip.Encode(tmp[0], tmp[1])
 		if err != nil {
 			return 0, "", err
 		}
+		client.connectionMode = ftp_cmd.ACTIVE
+		client.dataConnAddr = arg
 		arg = encodedArg
+	case ftp_cmd.PASS, ftp_cmd.USER, ftp_cmd.CWD, ftp_cmd.PWD, ftp_cmd.PASV, ftp_cmd.QUIT:
+	default:
+		return 0, "", errors.New("Command not implemented")
 	}
-	if cmd.IsDataCMD() {
-		go client.startDataConnection(cmd, arg, client.dataConnAddr, wg)
-	}
+
 	if _, err := client.write(cmd, arg); err != nil {
 		return 0, "", err
 	}
+
 	status, reply, err := client.handleReply()
 	if status == 226 {
 		status, reply, err = client.handleReply()
@@ -118,6 +130,7 @@ func (client *FtpClient) handleReply() (int, string, error) {
 	if err != nil {
 		return 0, "", err
 	}
+
 	switch status {
 	case 227:
 		addr, err := ftp_ip.Decode(reply)
@@ -128,8 +141,9 @@ func (client *FtpClient) handleReply() (int, string, error) {
 		client.connectionMode = ftp_cmd.PASSIVE
 	case 221:
 		return status, reply, errors.New("Time to quit")
+	case 150:
+		client.connectionMode = ftp_cmd.NOT_SET
 	default:
-		client.connectionMode = ftp_cmd.ACTIVE
 	}
 	return status, reply, nil
 }
@@ -141,6 +155,7 @@ func (client *FtpClient) startDataConnection(cmd ftp_cmd.CmdType, args, addr str
 	if err != nil {
 		return err
 	}
+
 	buf := make([]byte, 0, 8196)
 	n := 0
 	for tmp := range replyCh {
@@ -152,6 +167,7 @@ func (client *FtpClient) startDataConnection(cmd ftp_cmd.CmdType, args, addr str
 
 	switch cmd {
 	case ftp_cmd.LIST:
+
 		client.ioCh <- fmt.Sprintf(string(buf))
 	case ftp_cmd.RETR:
 		pathComponents := strings.Split(args, "/")
@@ -191,7 +207,7 @@ func (client *FtpClient) openDataConnection(addr string) (chan []byte, error) {
 
 func (client *FtpClient) read() (int, string, error) {
 	if !client.ctrlConnScanner.Scan() {
-		return 0, "", errors.New("Could not read server reply")
+		return 0, "", errors.New("Server connection closed")
 	}
 	line := strings.SplitN(client.ctrlConnScanner.Text(), " ", 2)
 	status, err := strconv.Atoi(line[0])
@@ -233,8 +249,8 @@ func (client *FtpClient) startIOChannel(wg *sync.WaitGroup) {
 }
 
 func (client *FtpClient) nextCommand() (ftp_cmd.CmdType, string, error) {
-	token, err := client.usrIn.NextCommand()
-	return token.Type, token.Arg, err
+	cmd, err := client.usrIn.NextCommand()
+	return cmd.Type, cmd.Arg, err
 }
 
 func (client *FtpClient) write(cmd ftp_cmd.CmdType, args string) (int, error) {

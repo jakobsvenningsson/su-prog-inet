@@ -42,6 +42,7 @@ func (ftpserver *FtpServer) Start() error {
 			fmt.Println(err.Error())
 			break
 		}
+		log.Printf("New connection accepted from %s.\n", conn.RemoteAddr())
 		go ftpserver.handle(conn)
 	}
 	return nil
@@ -57,17 +58,21 @@ func (ftpserver *FtpServer) Stop() {
 func (ftpserver *FtpServer) handle(conn net.Conn) {
 	defer conn.Close()
 	cc := client_connection.New(conn, ftpserver.usrAuthCh, ftpserver.root, ftpserver.ip)
+	log.Println("Sedning welcome msg.")
 	if err := cc.SendWelcomeMsg(); err != nil {
 		log.Fatal(err)
 	}
 	for {
 		token, err := cc.Command()
-		if token == nil {
-			break
-		}
 		if err != nil {
-			continue
+			switch err.(type) {
+			case *client_connection.NotImplementedError:
+				continue
+			default:
+				continue
+			}
 		}
+
 		exit, err := cc.Reply(token)
 		if err != nil {
 			log.Fatal(err)

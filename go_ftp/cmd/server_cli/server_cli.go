@@ -10,7 +10,7 @@ import (
 var (
 	root = flag.String("root", "/tmp", "Root directory of FTP server.")
 	port = flag.String("port", "10000", "Control connection port.")
-	ip   = flag.String("ip", "127.0.0.1", "Control connection addr.")
+	ip   = flag.String("ip", "", "Control connection addr.")
 )
 
 func main() {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 )
 
 type Cmd struct {
@@ -18,29 +19,35 @@ type Scanner struct {
 
 func NewScanner(input io.Reader) *Scanner {
 	scanner := bufio.NewScanner(input)
-	scanner.Split(bufio.ScanWords)
+	//scanner.Split(bufio.ScanWords)
 	return &Scanner{
 		in: scanner,
 	}
 }
 
 func (p *Scanner) NextCommand() (*Cmd, error) {
-	word, ok := p.nextWord()
+	line, ok := p.nextLine()
 	if !ok {
 		return nil, errors.New("No command")
+	}
+	components := strings.SplitN(line, " ", 2)
+	word := components[0]
+
+	if !isCommand(word) {
+		return nil, errors.New("Invalid command")
 	}
 	cmd := CmdType(word)
 	if !HasArg(cmd) {
 		return &Cmd{Type: cmd}, nil
 	}
-	arg, ok := p.nextWord()
-	if !ok || isCommand(arg) {
+	//arg, ok := p.nextWord()
+	if len(components) < 2 || isCommand(components[1]) {
 		return nil, fmt.Errorf("No argument for command %s", cmd)
 	}
-	return &Cmd{cmd, arg}, nil
+	return &Cmd{cmd, components[1]}, nil
 }
 
-func (p *Scanner) nextWord() (string, bool) {
+func (p *Scanner) nextLine() (string, bool) {
 	if !p.in.Scan() {
 		return "", false
 	}

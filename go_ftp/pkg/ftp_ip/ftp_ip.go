@@ -31,7 +31,14 @@ func Decode(addr string) (string, error) {
 	return fmt.Sprintf("%s:%d", host, port), nil
 }
 
-func Encode(addr string) (string, error) {
+func Encode(ip, port string) (string, error) {
+	var addr string
+	if ip == "" {
+		addr = "0.0.0.0:" + port
+	} else {
+		addr = fmt.Sprintf("%s:%s", ip, port)
+	}
+	fmt.Println(addr)
 	re := regexp.MustCompile(`\d+.\d+.\d+.\d+:\d+`)
 	matched := re.MatchString(addr)
 	if !matched {
@@ -40,12 +47,12 @@ func Encode(addr string) (string, error) {
 	c := strings.Split(addr, ":")
 	host := strings.Split(c[0], ".")
 	log.Println(host)
-	port, err := strconv.Atoi(c[1])
+	p, err := strconv.Atoi(c[1])
 	if err != nil {
-		log.Fatal(err)
+		return "", err
 	}
-	p1 := port % 256
-	p2 := (port - p1) / 256
+	p1 := p % 256
+	p2 := (p - p1) / 256
 
 	return fmt.Sprintf("%s,%s,%s,%s,%d,%d", host[0], host[1], host[2], host[3], p2, p1), nil
 }

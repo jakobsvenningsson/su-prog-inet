@@ -73,7 +73,7 @@ var tests = []struct {
 			ftp_cmd.Cmd{Type: ftp_cmd.PWD, Arg: ""},
 		},
 		[][]byte{
-			[]byte("257 / is current directory.\n"),
+			[]byte("257 \"/\" is current directory.\n"),
 		}, nil,
 	},
 	{
@@ -90,15 +90,15 @@ var tests = []struct {
 			ftp_cmd.Cmd{Type: ftp_cmd.CWD, Arg: "/invalid_path"},
 		},
 		[][]byte{
-			[]byte("257 / is current directory.\n"),
+			[]byte("257 \"/\" is current directory.\n"),
 			[]byte("250 CWD command successful.\n"),
-			[]byte("257 /1 is current directory.\n"),
+			[]byte("257 \"/1\" is current directory.\n"),
 			[]byte("250 CWD command successful.\n"),
-			[]byte("257 / is current directory.\n"),
+			[]byte("257 \"/\" is current directory.\n"),
 			[]byte("250 CWD command successful.\n"),
-			[]byte("257 /1 is current directory.\n"),
+			[]byte("257 \"/1\" is current directory.\n"),
 			[]byte("250 CWD command successful.\n"),
-			[]byte("257 /1 is current directory.\n"),
+			[]byte("257 \"/1\" is current directory.\n"),
 			[]byte("550 Invalid path.\n"),
 		}, nil,
 	},
@@ -123,22 +123,21 @@ func TestClientConnection(t *testing.T) {
 	}
 }
 
-func TestList(t *testing.T) {
+func TestListPASV(t *testing.T) {
 	cc, buf, authCh := initCC()
 	defer close(authCh)
-	var wg sync.WaitGroup
-	_, err := cc.Reply(&ftp_cmd.Cmd{Type: ftp_cmd.USER, Arg: "user"})
-	_, err = cc.Reply(&ftp_cmd.Cmd{Type: ftp_cmd.PASS, Arg: "pass"})
-	_, err = cc.Reply(&ftp_cmd.Cmd{Type: ftp_cmd.PASV, Arg: ""})
+	authenticate(cc, buf)
+	_, err := cc.Reply(&ftp_cmd.Cmd{Type: ftp_cmd.PASV, Arg: ""})
 	if ok, want, have := test_utils.VerifyError(err, nil); !ok {
 		t.Errorf("Error actual = %v, and Expected = %v.", have, want)
 	}
-	expected := []byte("227 127,0,0,1,")
+	expected := []byte("227 Entering Passive Mode (127,0,0,1,")
 	if !bytes.Contains(buf.Bytes(), expected) {
 		t.Errorf("Error actual = %s, and Expected = %s.", strings.TrimSuffix(string(buf.Bytes()), "\n"),
 			strings.TrimSuffix(string(expected), "\n"))
 	}
 
+	var wg sync.WaitGroup
 	go func(b []byte) {
 		wg.Add(1)
 		addr, _ := ftp_ip.Decode(string(b))
@@ -169,9 +168,51 @@ func TestList(t *testing.T) {
 		t.Errorf("Error actual = %s, and Expected = %s.", strings.TrimSuffix(string(buf.Bytes()), "\n"),
 			strings.TrimSuffix(string(expected), "\n"))
 	}
-
 	wg.Wait()
+}
 
+func TestListACTIVE(t *testing.T) {
+	cc, buf, authCh := initCC()
+	defer close(authCh)
+	authenticate(cc, buf)
+
+	addr, port := "127.0.0.1", "10001"
+	encodedAddr, _ := ftp_ip.Encode(addr, port)
+	_, err := cc.Reply(&ftp_cmd.Cmd{Type: ftp_cmd.PORT, Arg: encodedAddr})
+	if ok, want, have := test_utils.VerifyError(err, nil); !ok {
+		t.Errorf("Error actual = %v, and Expected = %v.", have, want)
+	}
+	expected := []byte("200 PORT command successful.\n")
+	if !bytes.Equal(buf.Bytes(), expected) {
+		t.Errorf("Error actual = %s, and Expected = %s.", strings.TrimSuffix(string(buf.Bytes()), "\n"),
+			strings.TrimSuffix(string(expected), "\n"))
+	}
+	buf.Reset()
+
+	var wg sync.WaitGroup
+	go func() {
+		ln, err := net.Listen("tcp", addr+":"+port)
+		if err != nil {
+			log.Fatal(err)
+		}
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		result, err := ioutil.ReadAll(conn)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		expected, _ := exec.Command("ls", "-l", root).Output()
+		if !bytes.Equal(result, expected) {
+			t.Errorf("Error actual = %s, and Expected = %s.", strings.TrimSuffix(string(result), "\n"),
+				strings.TrimSuffix(string(expected), "\n"))
+		}
+		conn.Close()
+		wg.Done()
+	}()
+	wg.Wait()
 }
 
 func initCC() (*client_connection.ClientConnection, *bytes.Buffer, chan client_connection.AuthPkg) {
@@ -190,4 +231,14 @@ func initCC() (*client_connection.ClientConnection, *bytes.Buffer, chan client_c
 	bytesBuf := bytes.NewBuffer(buf)
 	cc := client_connection.New(bytesBuf, authChan, root, "127.0.0.1")
 	return cc, bytesBuf, authChan
+}
+
+func authenticate(cc *client_connection.ClientConnection, buf *bytes.Buffer) {
+	if _, err := cc.Reply(&ftp_cmd.Cmd{Type: ftp_cmd.USER, Arg: "user"}); err != nil {
+		log.Fatal(err)
+	}
+	if _, err := cc.Reply(&ftp_cmd.Cmd{Type: ftp_cmd.PASS, Arg: "pass"}); err != nil {
+		log.Fatal(err)
+	}
+	buf.Reset()
 }

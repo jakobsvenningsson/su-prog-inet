@@ -9,15 +9,16 @@ import (
 )
 
 var encodeTests = []struct {
-	input       string
+	inputIP     string
+	inputPort   string
 	expected    string
 	expectedErr error
 }{
-	{"127.0.0.1:513", "127,0,0,1,2,1", nil},
-	{"127.0.0.1:21", "127,0,0,1,0,21", nil},
-	{"127.0.0.1:", "", errors.New("Invalid addr format")},
-	{"0.0.1:1234", "", errors.New("Invalid addr format")},
-	{"127.0.0.1:b", "", errors.New("Invalid addr format")},
+	{"127.0.0.1", "513", "127,0,0,1,2,1", nil},
+	{"127.0.0.1", "21", "127,0,0,1,0,21", nil},
+	{"127.0.0.1", "", "", errors.New("Invalid addr format")},
+	{"0.0.1", "1234", "", errors.New("Invalid addr format")},
+	{"127.0.0.1", "b", "", errors.New("Invalid addr format")},
 }
 
 var decodeTests = []struct {
@@ -33,7 +34,7 @@ var decodeTests = []struct {
 
 func TestFtpIPEncode(t *testing.T) {
 	for _, test := range encodeTests {
-		encoded, err := ftp_ip.Encode(test.input)
+		encoded, err := ftp_ip.Encode(test.inputIP, test.inputPort)
 		if ok, have, want := test_utils.VerifyError(err, test.expectedErr); !ok {
 			t.Errorf("Error actual = %v, and Expected = %v.", have, want)
 		}

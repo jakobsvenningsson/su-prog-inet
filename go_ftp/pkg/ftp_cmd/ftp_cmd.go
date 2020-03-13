@@ -12,6 +12,8 @@ const (
 	PASV         = "PASV"
 	PORT         = "PORT"
 	QUIT         = "QUIT"
+	EPSV         = "EPSV"
+	TYPE         = "TYPE"
 )
 
 var cmds = []CmdType{
@@ -24,6 +26,8 @@ var cmds = []CmdType{
 	PASV,
 	PORT,
 	QUIT,
+	EPSV,
+	TYPE,
 }
 
 func (cmd CmdType) IsDataCMD() bool {
@@ -36,7 +40,7 @@ func (cmd CmdType) IsDataCMD() bool {
 
 func HasArg(cmd CmdType) bool {
 	switch cmd {
-	case RETR, PASS, USER, CWD, PORT:
+	case RETR, PASS, USER, CWD, PORT, TYPE:
 		return true
 	}
 	return false
