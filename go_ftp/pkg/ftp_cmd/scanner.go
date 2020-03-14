@@ -3,9 +3,10 @@ package ftp_cmd
 import (
 	"bufio"
 	"errors"
-	"fmt"
 	"io"
 	"strings"
+
+	"github.com/jakobsvenningsson/go_ftp/pkg/ftp_error"
 )
 
 type Cmd struct {
@@ -34,7 +35,7 @@ func (p *Scanner) NextCommand() (*Cmd, error) {
 	word := components[0]
 
 	if !isCommand(word) {
-		return nil, errors.New("Invalid command")
+		return nil, &ftp_error.InvalidCommandError{word}
 	}
 	cmd := CmdType(word)
 	if !HasArg(cmd) {
@@ -42,7 +43,7 @@ func (p *Scanner) NextCommand() (*Cmd, error) {
 	}
 	//arg, ok := p.nextWord()
 	if len(components) < 2 || isCommand(components[1]) {
-		return nil, fmt.Errorf("No argument for command %s", cmd)
+		return nil, &ftp_error.NoArgumentError{word}
 	}
 	return &Cmd{cmd, components[1]}, nil
 }

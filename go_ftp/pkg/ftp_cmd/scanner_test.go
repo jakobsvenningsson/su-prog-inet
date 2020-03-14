@@ -28,7 +28,8 @@ var tests = []struct {
 	{"PORT\n", nil, errors.New("No argument for command PORT")},
 	{"LIST\n", &ftp_cmd.Cmd{ftp_cmd.LIST, ""}, nil},
 	{"PASV\n", &ftp_cmd.Cmd{ftp_cmd.PASV, ""}, nil},
-	{"\n", nil, errors.New("Invalid command")},
+	{"\n", nil, errors.New("Invalid Command: ")},
+	{"PASR\n", nil, errors.New("Invalid Command: PASR")},
 	{"", nil, errors.New("No command")},
 }
 
