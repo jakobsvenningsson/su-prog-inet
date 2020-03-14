@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 
+	"github.com/jakobsvenningsson/go_ftp/pkg/ftp_error"
 	"github.com/jakobsvenningsson/go_ftp/pkg/ftp_server/client_connection"
 )
 
@@ -31,10 +32,10 @@ func New(root, ip, port string) *FtpServer {
 
 func (ftpserver *FtpServer) Start() error {
 	ln, err := net.Listen("tcp", fmt.Sprintf("%s:%s", ftpserver.ip, ftpserver.port))
-	ftpserver.listener = ln
 	if err != nil {
 		return err
 	}
+	ftpserver.listener = ln
 	go ftpserver.startAuthChannel()
 	for {
 		conn, err := ln.Accept()
@@ -58,22 +59,21 @@ func (ftpserver *FtpServer) Stop() {
 func (ftpserver *FtpServer) handle(conn net.Conn) {
 	defer conn.Close()
 	cc := client_connection.New(conn, ftpserver.usrAuthCh, ftpserver.root, ftpserver.ip)
-	log.Println("Sedning welcome msg.")
 	if err := cc.SendWelcomeMsg(); err != nil {
 		log.Fatal(err)
 	}
+Loop:
 	for {
-		token, err := cc.Command()
+		cmd, err := cc.Command()
 		if err != nil {
 			switch err.(type) {
-			case *client_connection.NotImplementedError:
+			case *ftp_error.NotImplementedError:
 				continue
 			default:
-				continue
+				break Loop
 			}
 		}
-
-		exit, err := cc.Reply(token)
+		exit, err := cc.Reply(cmd)
 		if err != nil {
 			log.Fatal(err)
 		}
