@@ -7,7 +7,6 @@ import (
 	"io/ioutil"
 	"log"
 	"net"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -19,20 +18,22 @@ import (
 )
 
 type ClientConnection struct {
-	isAuth   bool
-	user     string
-	password string
-	path     string
-	root     string
-	ip       string
-	conn     io.ReadWriter
-	scanner  *ftp_cmd.Scanner
-	authCh   chan AuthPkg
-	dataCh   chan []byte
-	dataLn   net.Listener
-	mutex    sync.Mutex
-	dataAddr string
-	mode     ftp_cmd.MODE
+	isAuth          bool
+	user            string
+	ip              string
+	dirPath         ftpDirPath
+	dataConn        dataConnection
+	ctrlConn        io.ReadWriter
+	ctrlConnScanner *ftp_cmd.Scanner
+	authCh          chan AuthPkg
+	mode            ftp_cmd.MODE
+}
+
+type dataConnection struct {
+	addr string
+	ch   chan []byte
+	ln   net.Listener
+	mode ftp_cmd.MODE
 }
 
 type AuthPkg struct {
@@ -44,124 +45,111 @@ type AuthPkg struct {
 // Public Methods
 
 func New(conn io.ReadWriter, authCh chan AuthPkg, root, ip string) *ClientConnection {
-	cc := &ClientConnection{
-		isAuth:  false,
-		conn:    conn,
-		scanner: ftp_cmd.NewScanner(conn),
-		authCh:  authCh,
-		path:    "/",
-		root:    root,
-		dataCh:  make(chan []byte),
-		ip:      ip,
-		mode:    ftp_cmd.PASSIVE,
+	return &ClientConnection{
+		isAuth:          false,
+		ctrlConn:        conn,
+		ctrlConnScanner: ftp_cmd.NewScanner(conn),
+		authCh:          authCh,
+		dirPath:         ftpDirPath{root, "/"},
+		dataConn:        dataConnection{mode: ftp_cmd.PASSIVE},
+		ip:              ip,
 	}
-
-	return cc
 }
 
 func (cc *ClientConnection) Command() (*ftp_cmd.Cmd, error) {
-	token, err := cc.scanner.NextCommand()
+	cmd, err := cc.ctrlConnScanner.NextCommand()
 	if err != nil {
 		return nil, err
 	}
-	return token, nil
+	return cmd, nil
 }
 
-func (cc *ClientConnection) Reply(token *ftp_cmd.Cmd) (bool, error) {
-	log.Printf("Processing cmd %s, arg: %s.\n", token.Type, token.Arg)
-	if !cc.isAuth && cc.needAuth(token) {
+func (cc *ClientConnection) Reply(cmd *ftp_cmd.Cmd) error {
+	log.Printf("Replying to cmd %s, arg: %s.\n", cmd.Type, cmd.Arg)
+	if !cc.isAuth && cc.needAuth(cmd) {
 		err := cc.send(530, "Please login with USER and PASS.")
-		return false, err
+		return err
 	}
 
 	var err error
-	switch token.Type {
+	switch cmd.Type {
 	case ftp_cmd.USER:
-		err = cc.handleUserCMD(token)
+		err = cc.handleUserCMD(cmd)
 	case ftp_cmd.PASS:
-		err = cc.handlePassCMD(token)
+		err = cc.handlePassCMD(cmd)
 	case ftp_cmd.PWD:
-		err = cc.handlePwdCMD(token)
+		err = cc.handlePwdCMD(cmd)
 	case ftp_cmd.CWD:
-		err = cc.handleCwdCMD(token)
+		err = cc.handleCwdCMD(cmd)
 	case ftp_cmd.LIST:
-		err = cc.handleListCMD(token)
+		err = cc.handleListCMD(cmd)
 	case ftp_cmd.EPSV:
-		err = cc.handleEpsvCMD(token)
+		err = cc.handleEpsvCMD(cmd)
 	case ftp_cmd.PASV:
-		err = cc.handlePasvCMD(token)
+		err = cc.handlePasvCMD(cmd)
 	case ftp_cmd.PORT:
-		err = cc.handlePortCMD(token)
+		err = cc.handlePortCMD(cmd)
 	case ftp_cmd.RETR:
-		err = cc.handleRetrCMD(token)
+		err = cc.handleRetrCMD(cmd)
 	case ftp_cmd.TYPE:
-		return false, &ftp_error.NotImplementedError{string(token.Type)}
+		err = &ftp_error.NotImplementedError{string(cmd.Type)}
 	case ftp_cmd.QUIT:
-		if err := cc.send(221, "Goodbye"); err != nil {
-			return false, err
+		err = cc.send(221, "Goodbye")
+		if conn, ok := cc.ctrlConn.(net.Conn); ok {
+			conn.Close()
 		}
-		return true, nil
 	default:
-		if err := cc.send(500, fmt.Sprintf("'%s': command not understood.", token.Type)); err != nil {
-			return false, err
-		}
+		err = cc.send(500, fmt.Sprintf("'%s': command not understood.", cmd.Type))
 	}
-	return false, err
+	return err
 }
 
 func (cc *ClientConnection) SendWelcomeMsg() error {
-	if err := cc.send(220, "Service ready."); err != nil {
-		return err
-	}
-	return nil
+	return cc.send(220, "Service ready.")
 }
 
 // Private Methods
 
 func (cc *ClientConnection) send(status int, text string) error {
-	msg := fmt.Sprintf("%d %s\n", status, text)
-	_, err := cc.conn.Write([]byte(msg))
+	_, err := fmt.Fprintf(cc.ctrlConn, "%d %s\n", status, text)
 	return err
 }
 
-func (cc *ClientConnection) handleUserCMD(token *ftp_cmd.Cmd) error {
-	cc.user = token.Arg
+func (cc *ClientConnection) handleUserCMD(cmd *ftp_cmd.Cmd) error {
+	cc.user = cmd.Arg
 	return cc.send(331, fmt.Sprintf("Password required for %s.", cc.user))
 }
 
-func (cc *ClientConnection) handlePassCMD(token *ftp_cmd.Cmd) error {
-	cc.password = token.Arg
+func (cc *ClientConnection) handlePassCMD(cmd *ftp_cmd.Cmd) error {
 	replyCh := make(chan bool)
-	cc.authCh <- AuthPkg{cc.user, cc.password, replyCh}
-	isAuth := <-replyCh
-	if !isAuth {
+	cc.authCh <- AuthPkg{cc.user, cmd.Arg, replyCh}
+	cc.isAuth = <-replyCh
+	if !cc.isAuth {
 		return cc.send(530, "Login failed.")
 	}
-	cc.isAuth = true
 	return cc.send(230, "User logged in.")
 }
 
-func (cc *ClientConnection) handlePwdCMD(token *ftp_cmd.Cmd) error {
-	return cc.send(257, fmt.Sprintf("\"%s\" is current directory.", cc.path))
+func (cc *ClientConnection) handlePwdCMD(cmd *ftp_cmd.Cmd) error {
+	return cc.send(257, fmt.Sprintf("\"%s\" is current directory.", cc.dirPath.current))
 }
 
-func (cc *ClientConnection) handleCwdCMD(token *ftp_cmd.Cmd) error {
-	path := token.Arg
-	var newPath string
+func (cc *ClientConnection) handleCwdCMD(cmd *ftp_cmd.Cmd) error {
+	var path, newPath string = cmd.Arg, ""
 	if filepath.IsAbs(path) {
 		newPath = path
 	} else {
-		newPath = filepath.Join(cc.path, path)
+		newPath = filepath.Join(cc.dirPath.current, path)
 	}
-	if !cc.dirExist(newPath) {
+	if !cc.dirPath.exist(newPath) {
 		return cc.send(550, "Invalid path.")
 	}
-	cc.path = filepath.Clean(newPath)
+	cc.dirPath.current = filepath.Clean(newPath)
 	return cc.send(250, "CWD command successful.")
 }
 
-func (cc *ClientConnection) handleListCMD(token *ftp_cmd.Cmd) error {
-	output, err := exec.Command("ls", "-l", cc.root+cc.path).Output()
+func (cc *ClientConnection) handleListCMD(cmd *ftp_cmd.Cmd) error {
+	output, err := exec.Command("ls", "-l", cc.dirPath.path()).Output()
 	if err != nil {
 		return err
 	}
@@ -169,7 +157,7 @@ func (cc *ClientConnection) handleListCMD(token *ftp_cmd.Cmd) error {
 	go func() {
 		switch cc.mode {
 		case ftp_cmd.ACTIVE:
-			conn, err := net.Dial("tcp", cc.dataAddr)
+			conn, err := net.Dial("tcp", cc.dataConn.addr)
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -180,49 +168,39 @@ func (cc *ClientConnection) handleListCMD(token *ftp_cmd.Cmd) error {
 			conn.Close()
 			wait <- struct{}{}
 		case ftp_cmd.PASSIVE:
-			cc.mutex.Lock()
-			ch := cc.dataCh
-			cc.mutex.Unlock()
-			ch <- output
-			close(ch)
+			cc.dataConn.ch <- output
+			close(cc.dataConn.ch)
 			wait <- struct{}{}
 		default:
 			log.Fatal(errors.New("Unknown connection mode"))
 		}
 	}()
 
-	err = cc.send(150, "Opening ASCII mode data connection for file list.")
-	if err != nil {
+	if err := cc.send(150, "Opening ASCII mode data connection for file list."); err != nil {
 		return err
 	}
 	<-wait
 	return cc.send(226, "Transfer complete.")
 }
 
-func (cc *ClientConnection) handleEpsvCMD(token *ftp_cmd.Cmd) error {
-
+func (cc *ClientConnection) handleEpsvCMD(cmd *ftp_cmd.Cmd) error {
 	ch, ln, port, err := cc.openDataListener()
 	if err != nil {
 		return err
 	}
-	cc.mutex.Lock()
-	cc.dataLn = ln
-	cc.dataCh = ch
-	//cc.dataChs = append(cc.dataChs, ch)
-	cc.mutex.Unlock()
-	cc.mode = ftp_cmd.PASSIVE
+	cc.dataConn.ln = ln
+	cc.dataConn.ch = ch
+	cc.dataConn.mode = ftp_cmd.PASSIVE
 	return cc.send(229, fmt.Sprintf("Entering Extended Passive Mode (|||%s|)).", port))
 }
 
-func (cc *ClientConnection) handlePasvCMD(token *ftp_cmd.Cmd) error {
+func (cc *ClientConnection) handlePasvCMD(cmd *ftp_cmd.Cmd) error {
 	ch, ln, port, err := cc.openDataListener()
 	if err != nil {
 		return err
 	}
-	cc.mutex.Lock()
-	cc.dataLn = ln
-	cc.dataCh = ch
-	cc.mutex.Unlock()
+	cc.dataConn.ln = ln
+	cc.dataConn.ch = ch
 	encoded, err := ftp_ip.Encode(cc.ip, port)
 	if err != nil {
 		return err
@@ -231,31 +209,27 @@ func (cc *ClientConnection) handlePasvCMD(token *ftp_cmd.Cmd) error {
 	return cc.send(227, fmt.Sprintf("Entering Passive Mode (%s).", encoded))
 }
 
-func (cc *ClientConnection) handlePortCMD(token *ftp_cmd.Cmd) error {
-	addr, err := ftp_ip.Decode(token.Arg)
+func (cc *ClientConnection) handlePortCMD(cmd *ftp_cmd.Cmd) error {
+	addr, err := ftp_ip.Decode(cmd.Arg)
 	if err != nil {
 		return err
 	}
-	if cc.dataLn != nil {
-		cc.dataLn.Close()
-		cc.dataLn = nil
+	if cc.dataConn.ln != nil {
+		cc.dataConn.ln.Close()
+		cc.dataConn.ln = nil
 	}
-	cc.dataAddr = addr
-	cc.mode = ftp_cmd.ACTIVE
+	cc.dataConn.addr = addr
+	cc.dataConn.mode = ftp_cmd.ACTIVE
 	return cc.send(200, "PORT command successful.")
 }
 
-func (cc *ClientConnection) handleRetrCMD(token *ftp_cmd.Cmd) error {
-	file := token.Arg
-	var path string
-	if filepath.IsAbs(file) {
-		path = filepath.Join(cc.root, file)
-	} else {
-		path = filepath.Join(cc.root, cc.path, file)
+func (cc *ClientConnection) handleRetrCMD(cmd *ftp_cmd.Cmd) error {
+	var file, path string = cmd.Arg, ""
+	if !filepath.IsAbs(file) {
+		path = cc.dirPath.path()
 	}
-
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		log.Println("FFFF  " + path)
+	path = filepath.Join(path, file)
+	if !fileExist(path) {
 		return cc.send(550, "File not found.")
 	}
 
@@ -264,25 +238,15 @@ func (cc *ClientConnection) handleRetrCMD(token *ftp_cmd.Cmd) error {
 	wg.Add(1)
 
 	go func() {
-		var ch chan []byte
-		if cc.mode == ftp_cmd.PASSIVE {
-			//cc.mutex.Lock()
-			ch = cc.dataCh
-			//cc.dataChs = cc.dataChs[1:]
-
-		} else {
-			tmp, err := cc.openDataConnection(cc.dataAddr)
-			if err != nil {
-				log.Fatal(err)
-			}
-			ch = tmp
+		ch, err := cc.getDataChannel()
+		if err != nil {
+			wg.Done()
+			return
 		}
-
 		wg.Done()
-
-		//cc.mutex.Unlock()
 		data, err := ioutil.ReadFile(path)
 		if err != nil {
+			close(ch)
 			log.Fatal(err)
 		}
 		ch <- data
@@ -337,17 +301,21 @@ func (cc *ClientConnection) openDataConnection(addr string) (chan []byte, error)
 	return ch, nil
 }
 
-func (cc *ClientConnection) dirExist(path string) bool {
-	if src, err := os.Stat(filepath.Join(cc.root, path)); !os.IsNotExist(err) {
-		return src.IsDir()
-	}
-	return false
-}
-
 func (cc *ClientConnection) needAuth(cmd *ftp_cmd.Cmd) bool {
 	switch cmd.Type {
 	case ftp_cmd.USER, ftp_cmd.PASS, ftp_cmd.QUIT:
 		return false
 	}
 	return true
+}
+
+func (cc *ClientConnection) getDataChannel() (chan []byte, error) {
+	switch cc.mode {
+	case ftp_cmd.PASSIVE:
+		return cc.dataConn.ch, nil
+	case ftp_cmd.ACTIVE:
+		return cc.openDataConnection(cc.dataConn.addr)
+	default:
+		return nil, errors.New("Invalid data transfer mode")
+	}
 }

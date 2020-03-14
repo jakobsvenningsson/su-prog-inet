@@ -29,16 +29,6 @@ func TestClientConnection(t *testing.T) {
 		{
 			[]ftp_cmd.Cmd{
 				ftp_cmd.Cmd{Type: ftp_cmd.USER, Arg: "user"},
-				ftp_cmd.Cmd{Type: ftp_cmd.PASS, Arg: "pass"},
-			},
-			[][]byte{
-				[]byte("331 Password required for user.\n"),
-				[]byte("230 User logged in.\n"),
-			}, nil,
-		},
-		{
-			[]ftp_cmd.Cmd{
-				ftp_cmd.Cmd{Type: ftp_cmd.USER, Arg: "user"},
 				ftp_cmd.Cmd{Type: ftp_cmd.PASS, Arg: "wrong_password"},
 			},
 			[][]byte{
@@ -66,6 +56,16 @@ func TestClientConnection(t *testing.T) {
 			[][]byte{
 				[]byte("331 Password required for wrong_user.\n"),
 				[]byte("530 Login failed.\n"),
+			}, nil,
+		},
+		{
+			[]ftp_cmd.Cmd{
+				ftp_cmd.Cmd{Type: ftp_cmd.USER, Arg: "user"},
+				ftp_cmd.Cmd{Type: ftp_cmd.PASS, Arg: "pass"},
+			},
+			[][]byte{
+				[]byte("331 Password required for user.\n"),
+				[]byte("230 User logged in.\n"),
 			}, nil,
 		},
 		// Path tests
@@ -123,7 +123,7 @@ func TestClientConnection(t *testing.T) {
 	for _, test := range tests {
 		for i, cmd := range test.input {
 			expected := test.expected[i]
-			_, err := cc.Reply(&cmd)
+			err := cc.Reply(&cmd)
 			if ok, want, have := test_utils.VerifyError(err, test.expectedErr); !ok {
 				t.Errorf("Error actual = %v, and Expected = %v.", have, want)
 			}
@@ -171,7 +171,7 @@ func TestListPASV(t *testing.T) {
 	buf.Reset()
 
 	expected := []byte("150 Opening ASCII mode data connection for file list.\n226 Transfer complete.\n")
-	_, err = cc.Reply(&ftp_cmd.Cmd{Type: ftp_cmd.LIST, Arg: ""})
+	err = cc.Reply(&ftp_cmd.Cmd{Type: ftp_cmd.LIST, Arg: ""})
 	if ok, want, have := test_utils.VerifyError(err, nil); !ok {
 		t.Errorf("Error actual = %v, and Expected = %v.", have, want)
 	}
@@ -192,7 +192,7 @@ func TestListACTIVE(t *testing.T) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	_, err = cc.Reply(&ftp_cmd.Cmd{Type: ftp_cmd.PORT, Arg: encodedAddr})
+	err = cc.Reply(&ftp_cmd.Cmd{Type: ftp_cmd.PORT, Arg: encodedAddr})
 	if ok, want, have := test_utils.VerifyError(err, nil); !ok {
 		t.Errorf("Error actual = %v, and Expected = %v.", have, want)
 	}
@@ -231,7 +231,7 @@ func TestListACTIVE(t *testing.T) {
 	}()
 
 	expected = []byte("150 Opening ASCII mode data connection for file list.\n226 Transfer complete.\n")
-	_, err = cc.Reply(&ftp_cmd.Cmd{Type: ftp_cmd.LIST, Arg: ""})
+	err = cc.Reply(&ftp_cmd.Cmd{Type: ftp_cmd.LIST, Arg: ""})
 	if ok, want, have := test_utils.VerifyError(err, nil); !ok {
 		t.Errorf("Error actual = %v, and Expected = %v.", have, want)
 	}
@@ -276,7 +276,7 @@ func TestRetrPASV(t *testing.T) {
 	}()
 
 	expected := []byte("150 Opening ASCII mode data connection.\n226 Transfer complete.\n")
-	_, err = cc.Reply(&ftp_cmd.Cmd{Type: ftp_cmd.RETR, Arg: "test_file"})
+	err = cc.Reply(&ftp_cmd.Cmd{Type: ftp_cmd.RETR, Arg: "test_file"})
 	if ok, want, have := test_utils.VerifyError(err, nil); !ok {
 		t.Errorf("Error actual = %v, and Expected = %v.", have, want)
 	}
@@ -332,7 +332,7 @@ func TestRetrACTIVE(t *testing.T) {
 	}()
 
 	expected = []byte("150 Opening ASCII mode data connection.\n226 Transfer complete.\n")
-	_, err = cc.Reply(&ftp_cmd.Cmd{Type: ftp_cmd.RETR, Arg: "test_file"})
+	err = cc.Reply(&ftp_cmd.Cmd{Type: ftp_cmd.RETR, Arg: "test_file"})
 	if ok, want, have := test_utils.VerifyError(err, nil); !ok {
 		t.Errorf("Error actual = %v, and Expected = %v.", have, want)
 	}
@@ -367,10 +367,10 @@ func initCC() (*client_connection.ClientConnection, *bytes.Buffer, chan client_c
 }
 
 func authenticate(cc *client_connection.ClientConnection, buf *bytes.Buffer) {
-	if _, err := cc.Reply(&ftp_cmd.Cmd{Type: ftp_cmd.USER, Arg: "user"}); err != nil {
+	if err := cc.Reply(&ftp_cmd.Cmd{Type: ftp_cmd.USER, Arg: "user"}); err != nil {
 		log.Fatal(err)
 	}
-	if _, err := cc.Reply(&ftp_cmd.Cmd{Type: ftp_cmd.PASS, Arg: "pass"}); err != nil {
+	if err := cc.Reply(&ftp_cmd.Cmd{Type: ftp_cmd.PASS, Arg: "pass"}); err != nil {
 		log.Fatal(err)
 	}
 	buf.Reset()

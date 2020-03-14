@@ -57,7 +57,6 @@ func (ftpserver *FtpServer) Stop() {
 // Private Methods
 
 func (ftpserver *FtpServer) handle(conn net.Conn) {
-	defer conn.Close()
 	cc := client_connection.New(conn, ftpserver.usrAuthCh, ftpserver.root, ftpserver.ip)
 	if err := cc.SendWelcomeMsg(); err != nil {
 		log.Fatal(err)
@@ -73,14 +72,12 @@ Loop:
 				break Loop
 			}
 		}
-		exit, err := cc.Reply(cmd)
-		if err != nil {
+		if err := cc.Reply(cmd); err != nil {
 			log.Fatal(err)
 		}
-		if exit {
-			break
-		}
 	}
+	log.Printf("Connection closed %s.\n", conn.RemoteAddr())
+
 }
 
 func (ftpserver *FtpServer) startAuthChannel() {
