@@ -13,10 +13,9 @@ import (
 	"sync"
 
 	"github.com/jakobsvenningsson/go_ftp/pkg/ftp_cmd"
+	"github.com/jakobsvenningsson/go_ftp/pkg/ftp_error"
 	"github.com/jakobsvenningsson/go_ftp/pkg/ftp_ip"
 )
-
-const IOSync = "IO.SYNC"
 
 type FtpClient struct {
 	ctrlConn        io.ReadWriter
@@ -43,23 +42,47 @@ func New(usrIn io.Reader, ctrlConn io.ReadWriter, dataConnAddr, outDir string) (
 }
 
 func (client *FtpClient) ProcessCommands() error {
-	var wg sync.WaitGroup
-	go client.startIOChannel(&wg)
+	// This WaitGroup is used to make sure that all IO have been printed before the client exits.
+	var ioWg sync.WaitGroup
+	ioWg.Add(1)
+	defer ioWg.Wait()
+	defer close(client.ioCh)
+	// Start IO goroutine.
+	go func() {
+		for s := range client.ioCh {
+			fmt.Printf(s)
+		}
+		ioWg.Done()
+	}()
+	// This WaitGroup is used to make sure that all data transfers have finished before the client exits.
+	var dataWg sync.WaitGroup
+	defer dataWg.Wait()
+
+Loop:
 	for {
 		cmd, err := client.usrIn.NextCommand()
 		if err != nil {
 			log.Printf("%s.\n", err.Error())
-			continue
+			switch err.(type) {
+			case *ftp_error.NoArgumentError, *ftp_error.InvalidCommandError:
+				continue
+			default:
+				break Loop
+			}
 		}
 		log.Printf("Processing cmd: %s, arg: %s.\n", cmd.Type, cmd.Arg)
-		status, reply, err := client.processCommand(cmd, &wg)
+		status, reply, err := client.processCommand(cmd, &dataWg)
 		if err != nil {
 			log.Printf("%s.\n", err.Error())
-			continue
+			switch err.(type) {
+			case *ftp_error.ExitError:
+				break Loop
+			default:
+				continue
+			}
 		}
 		client.ioCh <- fmt.Sprintf("\r%d %s\n", status, reply)
 	}
-	wg.Wait()
 	return nil
 }
 
@@ -84,7 +107,7 @@ func (client *FtpClient) Authenticate(user, pw string) error {
 }
 
 func (client *FtpClient) ReadWelcomeMessage() (int, string, error) {
-	return client.read()
+	return client.readCtrlConn()
 }
 
 // Private Methods
@@ -108,29 +131,20 @@ func (client *FtpClient) processCommand(command *ftp_cmd.Cmd, wg *sync.WaitGroup
 		arg = encodedArg
 	case ftp_cmd.PASS, ftp_cmd.USER, ftp_cmd.CWD, ftp_cmd.PWD, ftp_cmd.PASV, ftp_cmd.QUIT:
 	default:
-		return 0, "", errors.New("Command not implemented")
+		return 0, "", &ftp_error.NotImplementedError{string(cmd)}
 	}
 
-	if _, err := client.write(cmd, arg); err != nil {
+	if _, err := client.send(cmd, arg); err != nil {
 		return 0, "", err
 	}
-
-	status, reply, err := client.handleReply()
-	if status == 226 {
-		status, reply, err = client.handleReply()
-	}
-	if err != nil {
-		return 0, "", err
-	}
-	return status, reply, nil
+	return client.handleReply()
 }
 
 func (client *FtpClient) handleReply() (int, string, error) {
-	status, reply, err := client.read()
+	status, reply, err := client.readReply()
 	if err != nil {
 		return 0, "", err
 	}
-
 	switch status {
 	case 227:
 		addr, err := ftp_ip.Decode(reply)
@@ -140,22 +154,19 @@ func (client *FtpClient) handleReply() (int, string, error) {
 		client.dataConnAddr = addr
 		client.connectionMode = ftp_cmd.PASSIVE
 	case 221:
-		return status, reply, errors.New("Time to quit")
-	case 150:
-		client.connectionMode = ftp_cmd.NOT_SET
+		return status, reply, &ftp_error.ExitError{}
 	default:
 	}
 	return status, reply, nil
 }
 
 func (client *FtpClient) startDataConnection(cmd ftp_cmd.CmdType, args, addr string, wg *sync.WaitGroup) error {
-	wg.Add(2)
+	wg.Add(1)
 	log.Printf("Starting data channel on addr %s.\n", addr)
 	replyCh, err := client.openDataConnection(addr)
 	if err != nil {
 		return err
 	}
-
 	buf := make([]byte, 0, 8196)
 	n := 0
 	for tmp := range replyCh {
@@ -167,7 +178,6 @@ func (client *FtpClient) startDataConnection(cmd ftp_cmd.CmdType, args, addr str
 
 	switch cmd {
 	case ftp_cmd.LIST:
-
 		client.ioCh <- fmt.Sprintf(string(buf))
 	case ftp_cmd.RETR:
 		pathComponents := strings.Split(args, "/")
@@ -176,36 +186,19 @@ func (client *FtpClient) startDataConnection(cmd ftp_cmd.CmdType, args, addr str
 	default:
 		log.Fatal("unknown command")
 	}
-	client.ioCh <- IOSync
 	wg.Done()
 	return nil
 }
 
 func (client *FtpClient) openDataConnection(addr string) (chan []byte, error) {
-	var conn net.Conn
-	var err error
-	switch client.connectionMode {
-	case ftp_cmd.ACTIVE:
-		ln, err := net.Listen("tcp", addr)
-		if err != nil {
-			return nil, err
-		}
-		conn, err = ln.Accept()
-		if err != nil {
-			return nil, err
-		}
-	case ftp_cmd.PASSIVE:
-		conn, err = net.Dial("tcp", addr)
-	default:
-		return nil, errors.New("Unknown connection model")
-	}
+	conn, err := client.getDataConnection(addr)
 	if err != nil {
 		return nil, err
 	}
 	return readDataAsync(conn), nil
 }
 
-func (client *FtpClient) read() (int, string, error) {
+func (client *FtpClient) readCtrlConn() (int, string, error) {
 	if !client.ctrlConnScanner.Scan() {
 		return 0, "", errors.New("Server connection closed")
 	}
@@ -238,22 +231,42 @@ func readDataAsync(r net.Conn) chan []byte {
 	return ch
 }
 
-func (client *FtpClient) startIOChannel(wg *sync.WaitGroup) {
-	for s := range client.ioCh {
-		if s == IOSync {
-			wg.Done()
-			continue
+func (client *FtpClient) readReply() (int, string, error) {
+	var status int
+	var reply string
+	var err error
+	for {
+		status, reply, err = client.readCtrlConn()
+		if err != nil {
+			return 0, "", err
 		}
-		fmt.Printf(s)
+		if status != 150 {
+			client.connectionMode = ftp_cmd.NOT_SET
+			break
+		}
 	}
+	return status, reply, err
 }
 
-func (client *FtpClient) nextCommand() (ftp_cmd.CmdType, string, error) {
-	cmd, err := client.usrIn.NextCommand()
-	return cmd.Type, cmd.Arg, err
+func (client *FtpClient) getDataConnection(addr string) (net.Conn, error) {
+	var conn net.Conn
+	var err error
+	switch client.connectionMode {
+	case ftp_cmd.ACTIVE:
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			return nil, err
+		}
+		conn, err = ln.Accept()
+	case ftp_cmd.PASSIVE:
+		conn, err = net.Dial("tcp", addr)
+	default:
+		return nil, errors.New("Unknown connection mode")
+	}
+	return conn, err
 }
 
-func (client *FtpClient) write(cmd ftp_cmd.CmdType, args string) (int, error) {
+func (client *FtpClient) send(cmd ftp_cmd.CmdType, args string) (int, error) {
 	return fmt.Fprintf(client.ctrlConn, string(cmd)+" "+args+"\r\n")
 }
 
