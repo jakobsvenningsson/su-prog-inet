@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"net/smtp"
+	"os"
 )
 
 type emailContext struct {
@@ -20,13 +21,19 @@ type emailContext struct {
 }
 
 func main() {
+	if len(os.Args) < 2 {
+		fmt.Println("Please specify a port.")
+		os.Exit(1)
+	}
+	port := os.Args[1]
+
 	http.Handle("/", http.FileServer(http.Dir("static")))
+	// Post Email Endpoint
 	http.HandleFunc("/email", func(w http.ResponseWriter, r *http.Request) {
 		var eCtx emailContext
 		if err := json.NewDecoder(r.Body).Decode(&eCtx); err != nil {
 			log.Fatal(err)
 		}
-
 		auth := smtp.PlainAuth("", eCtx.User, eCtx.Password, eCtx.Server)
 		to := []string{eCtx.To}
 		msg := []byte("To: " + eCtx.To + "\r\n" +
@@ -39,5 +46,6 @@ func main() {
 			log.Fatal(err)
 		}
 	})
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	// Serve HTTP
+	log.Fatal(http.ListenAndServe(":"+port, nil))
 }

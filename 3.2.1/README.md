@@ -2,6 +2,6 @@
 
 The email client consists of a html and javascript UI and a backend written in golang.
 
-Start server: `go run main.go`.
+Start server: `go run main.go 8080`.
 
 Access UI through browser: `localhost:8080`.

@@ -1,5 +1,6 @@
 package db
 
+// Post represents a database post entry
 type Post struct {
 	ID       int    `json:"id"`
 	Name     string `json:"name"`

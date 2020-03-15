@@ -1,3 +1,5 @@
+// Package db is responsible for all database communication. This package is the only package which communicates directly with the database.
+// This package exposes methods which enables other packages to interact with the database.
 package db
 
 import (
@@ -9,11 +11,13 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 )
 
+// DB represents a database connection
 type DB struct {
 	posts []Post
 	conn  *sql.DB
 }
 
+// Returns a new database connection object
 func New() *DB {
 	const (
 		host     = "atlas.dsv.su.se"
@@ -29,16 +33,17 @@ func New() *DB {
 		log.Fatal(err)
 	}
 
-	_, err = db.Exec(
+	// Create SQL-table if it does not exist already
+	if _, err = db.Exec(
 		"CREATE TABLE IF NOT EXISTS Posts ( id int NOT NULL AUTO_INCREMENT, " +
-			"name varchar(128), email varchar(128), homepage varchar(128), comment varchar(128), PRIMARY KEY (id));")
-	if err != nil {
+			"name varchar(128), email varchar(128), homepage varchar(128), comment varchar(128), PRIMARY KEY (id));"); err != nil {
 		log.Fatal(err)
 	}
 
 	return &DB{posts: []Post{}, conn: db}
 }
 
+// CreatePost inserts a post in the database
 func (db *DB) CreatePost(p Post) {
 
 	r, _ := regexp.Compile("<([^>]+)>")
@@ -55,6 +60,7 @@ func (db *DB) CreatePost(p Post) {
 	defer insert.Close()
 }
 
+// GetPosts returns all posts in the database
 func (db *DB) GetPosts() []Post {
 	results, err := db.conn.Query("SELECT * FROM Posts")
 	if err != nil {

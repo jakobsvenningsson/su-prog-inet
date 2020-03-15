@@ -10,6 +10,6 @@ import (
 
 func main() {
 	port, peers := os.Args[1], os.Args[2]
-	server := server.New(port, strings.Split(peers, ","))
-	log.Fatal(server.Listen())
+	s := server.New(port, strings.Split(peers, ","))
+	log.Fatal(s.Listen())
 }

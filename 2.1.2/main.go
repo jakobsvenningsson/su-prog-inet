@@ -1,11 +1,19 @@
 package main
 
 import (
-    "2.1.2/server"
-    "log"
+	"fmt"
+	"log"
+	"os"
+
+	"2.1.2/server"
 )
 
 func main() {
-    server := server.New("2000")
-    log.Fatal(server.Listen())
+	if len(os.Args) < 2 {
+		fmt.Println("Please specify a port.")
+		os.Exit(1)
+	}
+	port := os.Args[1]
+	s := server.New(port)
+	log.Fatal(s.Listen())
 }

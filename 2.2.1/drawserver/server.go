@@ -1,4 +1,4 @@
-// Package drawserver ...
+// Package drawserver implements the backend part of assigment 2.2.1. It exposes both HTTP endpoints as well as webserver functionality.
 package drawserver
 
 import (
@@ -22,11 +22,13 @@ type DrawServer struct {
 	ws    *websocket.Conn
 }
 
+// point represents a point in a 2-d plane
 type point struct {
 	X float32 `json:"x"`
 	Y float32 `json:"y"`
 }
 
+// line represents a line in a 2-d plane
 type line struct {
 	Coordiantes []point `json:"cords"`
 }
@@ -55,6 +57,8 @@ func (ds *DrawServer) Listen() error {
 	return http.ListenAndServe(fmt.Sprintf(":%s", ds.port), nil)
 }
 
+// listenUDP contains the logic which is responsible for communication between different draw-servers.
+// Draw-servers communicate with UDP messages.
 func (ds *DrawServer) listenUDP() {
 	port, err := strconv.Atoi(ds.port)
 	if err != nil {
@@ -95,6 +99,8 @@ func (ds *DrawServer) listenUDP() {
 	}
 }
 
+// newWs contains the logic which is responsible for communication between a draw-server and its web UI.
+// Draw-servers communicate with its UI frontend using websockets.
 func (ds *DrawServer) newWs(w http.ResponseWriter, r *http.Request) {
 	ws, err := upgrader.Upgrade(w, r, nil)
 	ds.ws = ws
@@ -116,7 +122,6 @@ func (ds *DrawServer) newWs(w http.ResponseWriter, r *http.Request) {
 
 		for _, peerPort := range ds.peers {
 			addr := fmt.Sprintf("127.0.0.1:%s", peerPort)
-			fmt.Println("sending to addr")
 			conn, err := net.Dial("udp", addr)
 			if err != nil {
 				panic(err)
@@ -130,6 +135,7 @@ func (ds *DrawServer) newWs(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// canvas returns the HTML code for a canvas
 func (ds *DrawServer) canvas(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	t, err := template.ParseFiles("templates/main.html")
@@ -144,6 +150,7 @@ func (ds *DrawServer) canvas(w http.ResponseWriter, r *http.Request) {
 	t.Execute(w, data)
 }
 
+// getLines returns all lines encoded as JSON
 func (ds *DrawServer) getLines(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(ds.lines)
 }
