@@ -14,6 +14,8 @@ const (
 	QUIT         = "QUIT"
 	EPSV         = "EPSV"
 	TYPE         = "TYPE"
+	DELE         = "DELE"
+	STOR         = "STOR"
 )
 
 var cmds = []CmdType{
@@ -28,11 +30,13 @@ var cmds = []CmdType{
 	QUIT,
 	EPSV,
 	TYPE,
+	DELE,
+	STOR,
 }
 
 func (cmd CmdType) IsDataCMD() bool {
 	switch cmd {
-	case LIST, RETR:
+	case LIST, RETR, STOR:
 		return true
 	}
 	return false
@@ -40,13 +44,13 @@ func (cmd CmdType) IsDataCMD() bool {
 
 func HasArg(cmd CmdType) bool {
 	switch cmd {
-	case RETR, PASS, USER, CWD, PORT, TYPE:
+	case RETR, PASS, USER, CWD, PORT, TYPE, STOR, DELE:
 		return true
 	}
 	return false
 }
 
-func isCommand(str string) bool {
+func IsCommand(str string) bool {
 	for _, cmd := range cmds {
 		if string(cmd) == str {
 			return true

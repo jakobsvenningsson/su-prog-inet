@@ -34,7 +34,7 @@ func (p *Scanner) NextCommand() (*Cmd, error) {
 	components := strings.SplitN(line, " ", 2)
 	word := components[0]
 
-	if !isCommand(word) {
+	if !IsCommand(word) {
 		return nil, &ftp_error.InvalidCommandError{word}
 	}
 	cmd := CmdType(word)
@@ -42,7 +42,7 @@ func (p *Scanner) NextCommand() (*Cmd, error) {
 		return &Cmd{Type: cmd}, nil
 	}
 	//arg, ok := p.nextWord()
-	if len(components) < 2 || isCommand(components[1]) {
+	if len(components) < 2 || IsCommand(components[1]) {
 		return nil, &ftp_error.NoArgumentError{word}
 	}
 	return &Cmd{cmd, components[1]}, nil
