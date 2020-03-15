@@ -129,9 +129,10 @@ func (client *FtpClient) processCommand(command *ftp_cmd.Cmd, wg *sync.WaitGroup
 		client.connectionMode = ftp_cmd.ACTIVE
 		client.dataConnAddr = arg
 		arg = encodedArg
-	case ftp_cmd.PASS, ftp_cmd.USER, ftp_cmd.CWD, ftp_cmd.PWD, ftp_cmd.PASV, ftp_cmd.QUIT:
 	default:
-		return 0, "", &ftp_error.NotImplementedError{string(cmd)}
+		if !ftp_cmd.IsCommand(string(cmd)) {
+			return 0, "", &ftp_error.NotImplementedError{string(cmd)}
+		}
 	}
 
 	if _, err := client.send(cmd, arg); err != nil {
