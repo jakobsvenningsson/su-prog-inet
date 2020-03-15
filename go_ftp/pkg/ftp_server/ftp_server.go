@@ -73,7 +73,8 @@ Loop:
 			}
 		}
 		if err := cc.Reply(cmd); err != nil {
-			log.Fatal(err)
+			fmt.Println(err.Error())
+			continue
 		}
 	}
 	log.Printf("Connection closed %s.\n", conn.RemoteAddr())

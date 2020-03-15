@@ -7,10 +7,10 @@ import (
 	"io/ioutil"
 	"log"
 	"net"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"github.com/jakobsvenningsson/go_ftp/pkg/ftp_cmd"
 	"github.com/jakobsvenningsson/go_ftp/pkg/ftp_error"
@@ -31,7 +31,7 @@ type ClientConnection struct {
 
 type dataConnection struct {
 	addr string
-	ch   chan []byte
+	ch   chan dataPackage
 	ln   net.Listener
 	mode ftp_cmd.MODE
 }
@@ -40,6 +40,12 @@ type AuthPkg struct {
 	User     string
 	Password string
 	ReplyCh  chan bool
+}
+
+type dataPackage struct {
+	action  byte
+	payload []byte
+	reply   chan int
 }
 
 // Public Methods
@@ -91,8 +97,12 @@ func (cc *ClientConnection) Reply(cmd *ftp_cmd.Cmd) error {
 		err = cc.handlePortCMD(cmd)
 	case ftp_cmd.RETR:
 		err = cc.handleRetrCMD(cmd)
+	case ftp_cmd.DELE:
+		err = cc.handleDeleCMD(cmd)
+	case ftp_cmd.STOR:
+		err = cc.handleStorCMD(cmd)
 	case ftp_cmd.TYPE:
-		err = &ftp_error.NotImplementedError{string(cmd.Type)}
+		err = cc.notImplementedError(cmd)
 	case ftp_cmd.QUIT:
 		err = cc.send(221, "Goodbye")
 		if conn, ok := cc.ctrlConn.(net.Conn); ok {
@@ -110,9 +120,38 @@ func (cc *ClientConnection) SendWelcomeMsg() error {
 
 // Private Methods
 
-func (cc *ClientConnection) send(status int, text string) error {
-	_, err := fmt.Fprintf(cc.ctrlConn, "%d %s\n", status, text)
-	return err
+func (cc *ClientConnection) handleDeleCMD(cmd *ftp_cmd.Cmd) error {
+	filepath, err := cc.getFilePathIfExist(cmd.Arg)
+	if err != nil {
+		return cc.send(550, "File not found.")
+	}
+	if err := os.Remove(filepath); err != nil {
+		return err
+	}
+	return cc.send(200, "DELE command successful.")
+
+}
+
+func (cc *ClientConnection) handleStorCMD(cmd *ftp_cmd.Cmd) error {
+	filePath := filepath.Join(cc.dirPath.path(), cmd.Arg)
+	wait := make(chan struct{})
+	cc.connectToDataConnection(func(ch chan dataPackage) {
+		wait <- struct{}{}
+		reply := make(chan int)
+		buf := make([]byte, 8196)
+		ch <- dataPackage{action: 'r', payload: buf, reply: reply}
+		n := <-reply
+		if err := ioutil.WriteFile(filePath, buf[:n], 0644); err != nil {
+			log.Fatal(err)
+		}
+		wait <- struct{}{}
+	})
+	<-wait
+	if err := cc.send(150, "Opening ASCII mode data connection for file."); err != nil {
+		return err
+	}
+	<-wait
+	return cc.send(226, "Transfer complete.")
 }
 
 func (cc *ClientConnection) handleUserCMD(cmd *ftp_cmd.Cmd) error {
@@ -135,16 +174,15 @@ func (cc *ClientConnection) handlePwdCMD(cmd *ftp_cmd.Cmd) error {
 }
 
 func (cc *ClientConnection) handleCwdCMD(cmd *ftp_cmd.Cmd) error {
-	var path, newPath string = cmd.Arg, ""
-	if filepath.IsAbs(path) {
-		newPath = path
-	} else {
-		newPath = filepath.Join(cc.dirPath.current, path)
-	}
-	if !cc.dirPath.exist(newPath) {
+	path, err := cc.getFilePathIfExist(cmd.Arg)
+	if err != nil {
 		return cc.send(550, "Invalid path.")
 	}
-	cc.dirPath.current = filepath.Clean(newPath)
+	p, err := filepath.Rel(cc.dirPath.root, path)
+	if err != nil {
+		log.Fatal(err)
+	}
+	cc.dirPath.current = filepath.Clean("/" + p)
 	return cc.send(250, "CWD command successful.")
 }
 
@@ -154,28 +192,12 @@ func (cc *ClientConnection) handleListCMD(cmd *ftp_cmd.Cmd) error {
 		return err
 	}
 	wait := make(chan struct{})
-	go func() {
-		switch cc.mode {
-		case ftp_cmd.ACTIVE:
-			conn, err := net.Dial("tcp", cc.dataConn.addr)
-			if err != nil {
-				log.Fatal(err)
-			}
-			_, err = conn.Write(output)
-			if err != nil {
-				log.Fatal(err)
-			}
-			conn.Close()
-			wait <- struct{}{}
-		case ftp_cmd.PASSIVE:
-			cc.dataConn.ch <- output
-			close(cc.dataConn.ch)
-			wait <- struct{}{}
-		default:
-			log.Fatal(errors.New("Unknown connection mode"))
-		}
-	}()
-
+	cc.connectToDataConnection(func(ch chan dataPackage) {
+		wait <- struct{}{}
+		ch <- dataPackage{action: 'w', payload: output}
+		wait <- struct{}{}
+	})
+	<-wait
 	if err := cc.send(150, "Opening ASCII mode data connection for file list."); err != nil {
 		return err
 	}
@@ -224,39 +246,23 @@ func (cc *ClientConnection) handlePortCMD(cmd *ftp_cmd.Cmd) error {
 }
 
 func (cc *ClientConnection) handleRetrCMD(cmd *ftp_cmd.Cmd) error {
-	var file, path string = cmd.Arg, ""
-	if !filepath.IsAbs(file) {
-		path = cc.dirPath.path()
-	}
-	path = filepath.Join(path, file)
-	if !fileExist(path) {
+	path, err := cc.getFilePathIfExist(cmd.Arg)
+	if err != nil {
 		return cc.send(550, "File not found.")
 	}
-
 	wait := make(chan struct{})
-	var wg sync.WaitGroup
-	wg.Add(1)
-
-	go func() {
-		ch, err := cc.getDataChannel()
-		if err != nil {
-			wg.Done()
-			return
-		}
-		wg.Done()
+	cc.connectToDataConnection(func(ch chan dataPackage) {
+		wait <- struct{}{}
 		data, err := ioutil.ReadFile(path)
 		if err != nil {
 			close(ch)
 			log.Fatal(err)
 		}
-		ch <- data
-		close(ch)
+		ch <- dataPackage{action: 'w', payload: data}
 		wait <- struct{}{}
-	}()
-
-	wg.Wait()
-
-	err := cc.send(150, "Opening ASCII mode data connection.")
+	})
+	<-wait
+	err = cc.send(150, "Opening ASCII mode data connection.")
 	if err != nil {
 		return err
 	}
@@ -265,12 +271,12 @@ func (cc *ClientConnection) handleRetrCMD(cmd *ftp_cmd.Cmd) error {
 
 }
 
-func (cc *ClientConnection) openDataListener() (chan []byte, net.Listener, string, error) {
+func (cc *ClientConnection) openDataListener() (chan dataPackage, net.Listener, string, error) {
 	listener, err := net.Listen("tcp", ":0")
 	if err != nil {
 		return nil, nil, "", err
 	}
-	ch := make(chan []byte)
+	ch := make(chan dataPackage)
 	go func() {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -278,24 +284,24 @@ func (cc *ClientConnection) openDataListener() (chan []byte, net.Listener, strin
 			return
 		}
 		defer conn.Close()
-		for data := range ch {
-			conn.Write(data)
+		for p := range ch {
+			cc.handleDataPackage(conn, p)
 		}
 	}()
 	tmp := strings.Split(listener.Addr().String(), ":")
 	return ch, listener, tmp[len(tmp)-1], nil
 }
 
-func (cc *ClientConnection) openDataConnection(addr string) (chan []byte, error) {
+func (cc *ClientConnection) openDataConnection(addr string) (chan dataPackage, error) {
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		return nil, err
 	}
-	ch := make(chan []byte)
+	ch := make(chan dataPackage)
 	go func() {
 		defer conn.Close()
-		for data := range ch {
-			conn.Write(data)
+		for p := range ch {
+			cc.handleDataPackage(conn, p)
 		}
 	}()
 	return ch, nil
@@ -309,7 +315,7 @@ func (cc *ClientConnection) needAuth(cmd *ftp_cmd.Cmd) bool {
 	return true
 }
 
-func (cc *ClientConnection) getDataChannel() (chan []byte, error) {
+func (cc *ClientConnection) getDataChannel() (chan dataPackage, error) {
 	switch cc.mode {
 	case ftp_cmd.PASSIVE:
 		return cc.dataConn.ch, nil
@@ -317,5 +323,56 @@ func (cc *ClientConnection) getDataChannel() (chan []byte, error) {
 		return cc.openDataConnection(cc.dataConn.addr)
 	default:
 		return nil, errors.New("Invalid data transfer mode")
+	}
+}
+
+func (cc *ClientConnection) notImplementedError(cmd *ftp_cmd.Cmd) error {
+	err := cc.send(550, fmt.Sprintf("'%s': command not implemented.", cmd.Type))
+	if err != nil {
+		return err
+	}
+	return &ftp_error.NotImplementedError{string(cmd.Type)}
+}
+
+func (cc *ClientConnection) send(status int, text string) error {
+	_, err := fmt.Fprintf(cc.ctrlConn, "%d %s\n", status, text)
+	return err
+}
+
+func (cc *ClientConnection) getFilePathIfExist(fileName string) (string, error) {
+	var newPath string
+	if filepath.IsAbs(fileName) {
+		newPath = fileName
+	} else {
+		newPath = filepath.Join(cc.dirPath.current, fileName)
+	}
+	filePath := filepath.Join(cc.dirPath.root, newPath)
+	if !fileExist(filePath) {
+		return "", &ftp_error.FileNotFoundError{filePath}
+	}
+	return filePath, nil
+}
+
+func (cc *ClientConnection) connectToDataConnection(action func(ch chan dataPackage)) {
+	go func() {
+		ch, err := cc.getDataChannel()
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer close(ch)
+		action(ch)
+	}()
+}
+
+func (cc *ClientConnection) handleDataPackage(conn net.Conn, p dataPackage) {
+	switch p.action {
+	case 'r':
+		n, err := conn.Read(p.payload)
+		if err != nil {
+			log.Fatal(err)
+		}
+		p.reply <- n
+	case 'w':
+		conn.Write(p.payload)
 	}
 }
