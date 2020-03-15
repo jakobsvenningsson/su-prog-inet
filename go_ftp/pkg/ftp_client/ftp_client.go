@@ -81,7 +81,7 @@ Loop:
 				continue
 			}
 		}
-		client.ioCh <- fmt.Sprintf("\r%d %s\n", status, reply)
+		client.ioCh <- fmt.Sprintf("%d %s\n", status, reply)
 	}
 	return nil
 }
@@ -115,7 +115,7 @@ func (client *FtpClient) ReadWelcomeMessage() (int, string, error) {
 func (client *FtpClient) processCommand(command *ftp_cmd.Cmd, wg *sync.WaitGroup) (int, string, error) {
 	cmd, arg := command.Type, command.Arg
 	switch cmd {
-	case ftp_cmd.LIST, ftp_cmd.RETR:
+	case ftp_cmd.LIST, ftp_cmd.RETR, ftp_cmd.STOR:
 		if client.connectionMode == ftp_cmd.NOT_SET {
 			return 0, "", errors.New("No connection mode specified")
 		}
@@ -138,65 +138,91 @@ func (client *FtpClient) processCommand(command *ftp_cmd.Cmd, wg *sync.WaitGroup
 	if _, err := client.send(cmd, arg); err != nil {
 		return 0, "", err
 	}
-	return client.handleReply()
+	return client.handleReply(cmd)
 }
 
-func (client *FtpClient) handleReply() (int, string, error) {
+func (client *FtpClient) handleReply(cmd ftp_cmd.CmdType) (int, string, error) {
 	status, reply, err := client.readReply()
 	if err != nil {
 		return 0, "", err
 	}
-	switch status {
-	case 227:
+	switch cmd {
+	case ftp_cmd.PASV:
 		addr, err := ftp_ip.Decode(reply)
 		if err != nil {
 			return 0, "", err
 		}
 		client.dataConnAddr = addr
 		client.connectionMode = ftp_cmd.PASSIVE
-	case 221:
+	case ftp_cmd.QUIT:
 		return status, reply, &ftp_error.ExitError{}
+	case ftp_cmd.PORT:
+		client.connectionMode = ftp_cmd.ACTIVE
 	default:
 	}
 	return status, reply, nil
 }
 
-func (client *FtpClient) startDataConnection(cmd ftp_cmd.CmdType, args, addr string, wg *sync.WaitGroup) error {
+func (client *FtpClient) startDataConnection(cmd ftp_cmd.CmdType, arg, addr string, wg *sync.WaitGroup) error {
 	wg.Add(1)
 	log.Printf("Starting data channel on addr %s.\n", addr)
-	replyCh, err := client.openDataConnection(addr)
+	dataAction, err := getDataAction(cmd)
 	if err != nil {
 		return err
 	}
+	replyCh, err := client.openDataConnection(addr, dataAction)
+	if err != nil {
+		return err
+	}
+
 	buf := make([]byte, 0, 8196)
 	n := 0
-	for tmp := range replyCh {
-		buf = append(buf, tmp...)
-		n += len(tmp)
-		client.ioCh <- fmt.Sprintf("\rDownloaded: %d bytes.", n)
+	switch dataAction {
+	case 'r':
+		for tmp := range replyCh {
+			buf = append(buf, tmp...)
+			n += len(tmp)
+			client.ioCh <- fmt.Sprintf("\rDownloaded: %d bytes.", n)
+		}
+		client.ioCh <- "\n"
+	case 'w':
+		bytes, err := ioutil.ReadFile(arg)
+		if err != nil {
+			return err
+		}
+		replyCh <- bytes
+		close(replyCh)
 	}
-	client.ioCh <- "\n"
 
 	switch cmd {
 	case ftp_cmd.LIST:
 		client.ioCh <- fmt.Sprintf(string(buf))
 	case ftp_cmd.RETR:
-		pathComponents := strings.Split(args, "/")
+		pathComponents := strings.Split(arg, "/")
 		name := pathComponents[len(pathComponents)-1]
 		err = ioutil.WriteFile(client.outDir+name, buf, 0644)
+	case ftp_cmd.STOR:
+		client.ioCh <- fmt.Sprintf("File %s saved to server.\n", arg)
 	default:
-		log.Fatal("unknown command")
+		return errors.New("Unknown command")
 	}
 	wg.Done()
 	return nil
 }
 
-func (client *FtpClient) openDataConnection(addr string) (chan []byte, error) {
+func (client *FtpClient) openDataConnection(addr string, mode byte) (chan []byte, error) {
 	conn, err := client.getDataConnection(addr)
 	if err != nil {
 		return nil, err
 	}
-	return readDataAsync(conn), nil
+	switch mode {
+	case 'r':
+		return readDataAsync(conn), nil
+	case 'w':
+		return writeDataAsync(conn), nil
+	default:
+		return nil, fmt.Errorf("Invalid mode %c", mode)
+	}
 }
 
 func (client *FtpClient) readCtrlConn() (int, string, error) {
@@ -227,6 +253,23 @@ func readDataAsync(r net.Conn) chan []byte {
 				return
 			}
 			ch <- tmp[:n]
+		}
+	}()
+	return ch
+}
+
+func writeDataAsync(r net.Conn) chan []byte {
+	ch := make(chan []byte)
+	go func() {
+		for {
+			for d := range ch {
+				_, err := r.Write(d)
+				if err != nil {
+					log.Println(err.Error())
+					return
+				}
+			}
+			r.Close()
 		}
 	}()
 	return ch
@@ -273,4 +316,15 @@ func (client *FtpClient) send(cmd ftp_cmd.CmdType, args string) (int, error) {
 
 func unexpectedStatusError(received, expected int) error {
 	return fmt.Errorf("Expected status code %d when sending user to server but received status %d", expected, received)
+}
+
+func getDataAction(cmd ftp_cmd.CmdType) (byte, error) {
+	switch cmd {
+	case ftp_cmd.RETR, ftp_cmd.LIST:
+		return 'r', nil
+	case ftp_cmd.STOR:
+		return 'w', nil
+	default:
+		return ' ', errors.New("Invalid command")
+	}
 }

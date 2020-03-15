@@ -65,6 +65,7 @@ Loop:
 	for {
 		cmd, err := cc.Command()
 		if err != nil {
+			fmt.Println(err.Error())
 			switch err.(type) {
 			case *ftp_error.NotImplementedError:
 				continue
